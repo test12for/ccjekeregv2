@@ -1,0 +1,142 @@
+#include <opencv2/opencv.hpp>
+#include <iostream>
+#include <cmath>
+#include <vector>
+
+using namespace cv;
+using namespace std;
+
+// Cấu trúc để lưu thông tin về hitbox
+struct Hitbox {
+    Rect boundingBox;
+    double area;
+
+    Hitbox(Rect box) {
+        boundingBox = box;
+        area = box.area();  // Tính diện tích của hitbox
+    }
+};
+
+// Hàm tìm hitbox gây sát thương lớn nhất
+Hitbox findLargestHitbox(const vector<Hitbox>& hitboxes) {
+    Hitbox largestHitbox = hitboxes[0];
+    for (const auto& hitbox : hitboxes) {
+        if (hitbox.area > largestHitbox.area) {
+            largestHitbox = hitbox;
+        }
+    }
+    return largestHitbox;
+}
+
+// Hàm tính góc hướng bắn
+double calculateAngle(Point start, Point end) {
+    return atan2(end.y - start.y, end.x - start.x) * 180.0 / CV_PI;
+}
+
+// Hàm điều chỉnh hướng bắn để tránh hitbox lớn nhất
+Point adjustAimToAvoidHitbox(Point aim, Hitbox largestHitbox, double offset = 50) {
+    // Tính toán các góc và hướng bắn mới để tránh vùng lớn nhất của hitbox
+    Point center = (largestHitbox.boundingBox.tl() + largestHitbox.boundingBox.br()) / 2;
+    
+    // Đảm bảo rằng tâm không đi vào khu vực của hitbox lớn nhất
+    if (aim.x >= largestHitbox.boundingBox.x && aim.x <= largestHitbox.boundingBox.x + largestHitbox.boundingBox.width &&
+        aim.y >= largestHitbox.boundingBox.y && aim.y <= largestHitbox.boundingBox.y + largestHitbox.boundingBox.height) {
+        // Di chuyển điểm nhắm ra ngoài khu vực hitbox
+        // Di chuyển theo một hướng nhất định (ví dụ: dịch chuyển theo chiều dọc)
+        if (aim.y < center.y) {
+            aim.y -= offset;  // Di chuyển lên nếu hiện tại nằm dưới hitbox
+        } else {
+            aim.y += offset;  // Di chuyển xuống nếu hiện tại nằm trên hitbox
+        }
+    }
+
+    return aim;
+}
+
+// Lớp để điều khiển tâm bắn trong ứng dụng iOS (tương tự như trong ứng dụng game)
+class DamageTargeting {
+public:
+    float dpi = 60.0f;
+    float sensitivity = 200.0f;
+    Point currentCenter = Point(0, 0);
+    vector<Hitbox> damageZones;
+
+    DamageTargeting() {
+        // Các vùng sát thương (tạm giả lập)
+        damageZones.push_back(Hitbox(Rect(100, 150, 50, 50)));
+        damageZones.push_back(Hitbox(Rect(300, 400, 70, 70)));
+        damageZones.push_back(Hitbox(Rect(500, 600, 90, 90)));
+        damageZones.push_back(Hitbox(Rect(700, 800, 30, 30)));
+    }
+
+    // Di chuyển tâm đến mục tiêu
+    void moveToTarget(Point target) {
+        float distanceX = target.x - currentCenter.x;
+        float distanceY = target.y - currentCenter.y;
+
+        // Tính toán độ di chuyển theo DPI và sensitivity
+        float movementX = distanceX * sensitivity / dpi;
+        float movementY = distanceY * sensitivity / dpi;
+
+        // Di chuyển tâm đến vị trí mục tiêu
+        currentCenter = Point(currentCenter.x + movementX, currentCenter.y + movementY);
+    }
+
+    // Tìm kiếm vùng sát thương cao nhất
+    Point findHighestDamageZone() {
+        Hitbox highestDamageZone = damageZones[0];
+        for (auto& zone : damageZones) {
+            if (zone.area > highestDamageZone.area) {
+                highestDamageZone = zone;
+            }
+        }
+        return Point(highestDamageZone.boundingBox.x + highestDamageZone.boundingBox.width / 2, 
+                      highestDamageZone.boundingBox.y + highestDamageZone.boundingBox.height / 2);
+    }
+};
+
+// Hàm bắn và điều chỉnh tâm ảo
+void aimAndShoot(Mat& image, Point playerPosition, DamageTargeting& targeting, vector<Hitbox>& enemyHitboxes) {
+    // Tìm hitbox lớn nhất của đối thủ
+    Hitbox largestHitbox = findLargestHitbox(enemyHitboxes);
+
+    // Tìm vùng sát thương cao nhất
+    Point damageTarget = targeting.findHighestDamageZone();
+
+    // Điều chỉnh điểm nhắm để tránh hitbox lớn nhất
+    Point adjustedAim = adjustAimToAvoidHitbox(damageTarget, largestHitbox);
+
+    // Di chuyển tâm đến điểm nhắm đã điều chỉnh
+    targeting.moveToTarget(adjustedAim);
+
+    // Hiển thị kết quả
+    circle(image, adjustedAim, 5, Scalar(0, 255, 0), -1); // Vẽ tâm ảo màu xanh lá cây
+    cout << "Nhắm vào điểm: (" << adjustedAim.x << ", " << adjustedAim.y << ")" << endl;
+
+    // Giả lập bắn: Tạo vệt bắn từ playerPosition đến aim
+    line(image, playerPosition, adjustedAim, Scalar(0, 0, 255), 2); // Vẽ vệt bắn màu đỏ
+    imshow("Aiming", image);
+    waitKey(0);
+}
+
+int main() {
+    // Đọc ảnh hoặc tạo hình nền cho game
+    Mat image = Mat::zeros(500, 500, CV_8UC3);
+
+    // Vị trí của player (x, y)
+    Point playerPosition(250, 250); 
+
+    // Các hitbox của đối thủ (giả sử đã được xác định)
+    vector<Hitbox> enemyHitboxes = {
+        Hitbox(Rect(150, 150, 100, 150)), // Một hitbox của đối thủ
+        Hitbox(Rect(350, 100, 80, 120))   // Một hitbox khác của đối thủ
+    };
+
+    // Tạo đối tượng điều khiển tâm bắn
+    DamageTargeting targeting;
+
+    // Bắn và điều chỉnh tâm
+    aimAndShoot(image, playerPosition, targeting, enemyHitboxes);
+
+    return 0;
+}
